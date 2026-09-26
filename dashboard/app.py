@@ -12,6 +12,7 @@ Pages:
   Attack Timeline   — chronological event chain for a selected session
   Threat Investigation — detailed view with injection/trajectory/judge findings
   Capabilities / Policy — static view of agent capability registry
+  Attack Lab        — trigger real pipeline calls via API buttons
 
 Run:
     streamlit run dashboard/app.py
@@ -22,9 +23,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
+import httpx
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -204,7 +208,7 @@ def page_live_activity(records: list[dict]) -> None:
 
     col1, col2 = st.columns([3, 1])
     with col2:
-        auto_refresh = st.checkbox("Auto-refresh (5s)", value=False)
+        auto_refresh = st.checkbox("Auto-refresh (3s)", value=False)
     with col1:
         filter_decision = st.multiselect(
             "Filter by decision",
@@ -225,7 +229,7 @@ def page_live_activity(records: list[dict]) -> None:
 
     if auto_refresh:
         import time
-        time.sleep(5)
+        time.sleep(3)
         st.rerun()
 
 
@@ -359,8 +363,14 @@ def _render_detail(r: dict) -> None:
         unsafe_allow_html=True,
     )
 
+    # Judge reasoning — most compelling part of the demo; shown prominently
     if r.get("reason"):
-        st.markdown(f"**Reason:** {r['reason']}")
+        decision = r.get("decision", "")
+        if decision in ("BLOCK", "REVOKE", "REQUIRE_APPROVAL", "WARN"):
+            st.error(f"🧠 **Judge Reasoning:** {r['reason']}")
+        else:
+            st.success(f"🧠 **Judge Reasoning:** {r['reason']}")
+
     if r.get("triggered_rules"):
         st.markdown(f"**Rules:** `{'`, `'.join(r['triggered_rules'])}`")
     if r.get("risk_level"):
@@ -369,11 +379,184 @@ def _render_detail(r: dict) -> None:
             unsafe_allow_html=True,
         )
     if r.get("injection_detected"):
-        st.warning("**Injection detected** in this action.")
+        st.warning("🚨 **Injection detected** in this action.")
     if r.get("policy_violated_rules"):
         st.markdown(f"**Policy violations:** `{'`, `'.join(r['policy_violated_rules'])}`")
     if r.get("data_classification"):
         st.markdown(f"**Data classification:** `{r['data_classification']}`")
+    if r.get("revoked_capability"):
+        st.error(f"🔒 **Revoked capability:** `{r['revoked_capability']}`")
+
+
+# ---------------------------------------------------------------------------
+# Page: Capabilities / Policy
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# API helper
+# ---------------------------------------------------------------------------
+
+
+def _api_url() -> str:
+    return settings.veil_api_url.rstrip("/")
+
+
+def _api_get(path: str) -> Optional[dict | list]:
+    try:
+        resp = httpx.get(f"{_api_url()}{path}", timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        return None
+
+
+def _api_post(path: str, payload: dict) -> Optional[dict | list]:
+    try:
+        resp = httpx.post(f"{_api_url()}{path}", json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Page: Attack Lab
+# ---------------------------------------------------------------------------
+
+_SCENARIO_META = {
+    "support_legitimate":   {"label": "✅ Legitimate Request",    "desc": "SupportAgent reads customer record — should ALLOW"},
+    "p0_attack":            {"label": "💀 P0 Attack Chain",        "desc": "Injection → PII read → exfiltration → REVOKE"},
+    "privilege_abuse":      {"label": "🔒 Privilege Abuse",        "desc": "Shell execution attempt — globally forbidden"},
+    "pii_write_attempt":    {"label": "✏️ PII Write Attempt",      "desc": "Unauthorised write to customer_db — BLOCK"},
+    "finance_legitimate":   {"label": "💰 Finance Legitimate",     "desc": "FinanceAgent reads payment records — ALLOW"},
+}
+
+
+def page_attack_lab() -> None:
+    st.title("⚔️ Attack Lab")
+    st.markdown(
+        "Trigger real pipeline calls through the VEIL API. "
+        "Results are live — no prerecorded data."
+    )
+
+    # API health check
+    health = _api_get("/api/v1/health")
+    if health is None:
+        st.error(
+            f"⚠️ VEIL API not reachable at `{_api_url()}`. "
+            "Start it with: `uvicorn api.main:app --port 8000`"
+        )
+    else:
+        overall = health.get("status", "unknown")
+        if overall == "ok":
+            st.success(f"🟢 VEIL API connected — all components healthy")
+        else:
+            st.warning(f"🟡 VEIL API connected but some components degraded")
+
+    st.divider()
+
+    # Before/After toggle
+    mode = st.radio(
+        "Demo Mode",
+        options=["🛡️ After VEIL (Gateway enforces)", "⚠️ Before VEIL (Direct — no gateway)"],
+        horizontal=True,
+        key="attack_lab_mode",
+    )
+    use_veil = mode.startswith("🛡️")
+
+    st.divider()
+    st.subheader("Attack Scenarios")
+
+    for scenario_name, meta in _SCENARIO_META.items():
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            run = st.button(meta["label"], key=f"btn_{scenario_name}", use_container_width=True)
+        with col2:
+            st.markdown(f"_{meta['desc']}_")
+
+        if run:
+            if use_veil:
+                _run_scenario_via_api(scenario_name)
+            else:
+                _run_scenario_direct(scenario_name)
+
+
+def _run_scenario_via_api(scenario_name: str) -> None:
+    """Run a named scenario via the VEIL API and render results."""
+    with st.spinner(f"Running `{scenario_name}` through VEIL…"):
+        result = _api_post("/api/v1/attacks/run", {"scenario": scenario_name})
+
+    if result is None or "error" in result:
+        st.error(f"API error: {result.get('error') if result else 'No response'}")
+        return
+
+    steps = result.get("steps", [])
+    session_id = result.get("session_id", "")
+    st.markdown(f"**Session:** `{session_id}` — **{len(steps)} step(s)**")
+
+    for step in steps:
+        decision = step.get("decision", "UNKNOWN")
+        color = _DECISION_COLORS.get(decision, "#64748b")
+        badge_html = _decision_badge(decision)
+        risk_html = _risk_badge(step.get("risk_level", "NONE"))
+
+        with st.expander(
+            f"Step {step['step']} — {step['tool']}.{step['operation']} → {step['resource']}  [{decision}]",
+            expanded=(decision not in ("ALLOW",)),
+        ):
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"**Decision:** {badge_html}", unsafe_allow_html=True)
+            c2.markdown(f"**Risk:** {risk_html}", unsafe_allow_html=True)
+            c3.markdown(f"**Executed:** {'Yes ✅' if step.get('executed') else 'No 🚫'}")
+
+            reason = step.get("reason", "")
+            if decision in ("BLOCK", "REVOKE", "REQUIRE_APPROVAL"):
+                st.error(f"🧠 **Reason:** {reason}")
+            elif decision == "WARN":
+                st.warning(f"🧠 **Reason:** {reason}")
+            else:
+                st.success(f"🧠 **Reason:** {reason}")
+
+            if step.get("triggered_rules"):
+                st.markdown(f"**Rules fired:** `{'`, `'.join(step['triggered_rules'])}`")
+            if step.get("injection_detected"):
+                st.warning("🚨 Injection detected")
+            if step.get("revoked_capability"):
+                st.error(f"🔒 Capability revoked: `{step['revoked_capability']}`")
+            if step.get("execution_output"):
+                with st.expander("Tool output"):
+                    st.json(step["execution_output"])
+
+
+def _run_scenario_direct(scenario_name: str) -> None:
+    """Run scenario directly (no gateway) — Before VEIL mode."""
+    from simulator.client.scenarios import SCENARIOS
+    from simulator.client.tools import dispatch
+
+    scenario_fn = SCENARIOS.get(scenario_name)
+    if scenario_fn is None:
+        st.error(f"Unknown scenario: {scenario_name}")
+        return
+
+    session_id = f"direct-{scenario_name}-{uuid.uuid4().hex[:6]}"
+    actions = scenario_fn(session_id=session_id)
+
+    st.warning(f"⚠️ Running WITHOUT VEIL — {len(actions)} action(s) dispatched directly to tool stubs")
+    st.markdown(f"**Session:** `{session_id}`")
+
+    for i, action in enumerate(actions, start=1):
+        with st.expander(
+            f"Step {i} — {action.tool}.{action.operation} → {action.resource}  [UNPROTECTED]",
+            expanded=True,
+        ):
+            st.markdown(f"**Mode:** ⚠️ No VEIL gateway")
+            try:
+                output = dispatch(action)
+                st.success("✅ Tool executed (no enforcement)")
+                st.json(output)
+            except Exception as exc:
+                st.error(f"Tool error: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +602,21 @@ def page_capabilities() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _render_health_indicators() -> None:
+    """Show per-component health from the API on the Overview page."""
+    health = _api_get("/api/v1/health")
+    if health is None:
+        st.warning(f"⚠️ VEIL API not reachable at `{_api_url()}`")
+        return
+
+    components = health.get("components", {})
+    cols = st.columns(len(components))
+    for col, (name, info) in zip(cols, components.items()):
+        status = info.get("status", "unknown")
+        icon = "🟢" if status == "ok" else ("🟡" if status == "warning" else "🔴")
+        col.metric(label=f"{icon} {name.capitalize()}", value=status.upper())
+
+
 def main() -> None:
     st.set_page_config(
         page_title="VEIL Dashboard",
@@ -447,10 +645,12 @@ def main() -> None:
             "Attack Timeline",
             "Threat Investigation",
             "Capabilities / Policy",
+            "⚔️ Attack Lab",
         ],
     )
 
     st.sidebar.divider()
+    st.sidebar.markdown(f"**API URL:** `{_api_url()}`")
     st.sidebar.markdown(f"**Audit file:** `{audit_path}`")
     st.sidebar.markdown(f"**Events loaded:** {len(records)}")
     st.sidebar.markdown(f"**Threat patterns:** {len(threat_records)}")
@@ -460,6 +660,8 @@ def main() -> None:
 
     # Route to page
     if page == "Overview":
+        _render_health_indicators()
+        st.divider()
         page_overview(records)
     elif page == "Live Activity":
         page_live_activity(records)
@@ -469,6 +671,8 @@ def main() -> None:
         page_threat_investigation(records, threat_records)
     elif page == "Capabilities / Policy":
         page_capabilities()
+    elif page == "⚔️ Attack Lab":
+        page_attack_lab()
 
 
 if __name__ == "__main__":

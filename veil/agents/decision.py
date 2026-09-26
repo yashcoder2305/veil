@@ -99,10 +99,32 @@ class DecisionEngine:
             )
 
         # ------------------------------------------------------------------
-        # Priority 3: Hard policy violation (no escalation path)
+        # Priority 3: Hard policy violation — escalate to REVOKE when both
+        #              PII-to-external and external-HTTP-without-grant fire
+        #              (makes the P0 demo story: WARN → ALLOW → REVOKE)
         # ------------------------------------------------------------------
         if not policy_result.passed and not policy_result.requires_escalation:
             triggered_rules.extend(policy_result.violated_rules)
+            violated = set(policy_result.violated_rules)
+            # Escalate to REVOKE when the action is both exfiltrating PII and
+            # making an external HTTP call the agent has no grant for.
+            if (
+                "POLICY_PII_TO_EXTERNAL" in violated
+                and "POLICY_EXTERNAL_HTTP_FROM_NON_RESEARCH" in violated
+            ):
+                return DecisionResult(
+                    decision=Decision.REVOKE,
+                    reason=(
+                        f"Exfiltration attempt: PII destined for external endpoint AND "
+                        f"external HTTP capability not granted. "
+                        f"Capability 'http.request' revoked for this session. "
+                        f"Original policy reason: {policy_result.reason}"
+                    ),
+                    triggered_rules=triggered_rules,
+                    confidence=1.0,
+                    requires_human_review=False,
+                    revoked_capability="http.request",
+                )
             return DecisionResult(
                 decision=Decision.BLOCK,
                 reason=f"Hard policy violation: {policy_result.reason}",

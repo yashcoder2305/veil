@@ -50,8 +50,8 @@ class _Settings:
 
     @property
     def groq_model_id(self) -> str:
-        """Groq model to use. Default: llama3-8b-8192 (fast, free tier)."""
-        return os.environ.get("GROQ_MODEL_ID", "llama3-8b-8192")
+        """Groq model to use. Default: llama-3.3-70b-versatile."""
+        return os.environ.get("GROQ_MODEL_ID", "llama-3.3-70b-versatile")
 
     # ------------------------------------------------------------------
     # Audit & memory persistence
@@ -102,12 +102,18 @@ class _Settings:
     def gateway_port(self) -> int:
         return int(os.environ.get("GATEWAY_PORT", "8000"))
 
+    @property
+    def veil_api_url(self) -> str:
+        """Base URL of the VEIL FastAPI gateway. Used by dashboard and live agent."""
+        return os.environ.get("VEIL_API_URL", "http://localhost:8000")
+
     def __repr__(self) -> str:  # never print credentials
         return (
             f"VEILSettings("
             f"model={self.groq_model_id!r}, "
             f"audit={self.audit_file_path}, "
-            f"gateway={self.gateway_host}:{self.gateway_port})"
+            f"gateway={self.gateway_host}:{self.gateway_port}, "
+            f"api_url={self.veil_api_url!r})"
         )
 
 

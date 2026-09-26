@@ -1,0 +1,61 @@
+# docker-compose.yml
+# VEIL — Verifiable Execution Isolation Layer
+#
+# Start the full system:
+#   docker compose up --build
+#
+# Access:
+#   Dashboard : http://localhost:8501
+#   API docs  : http://localhost:8000/docs
+#   Health    : http://localhost:8000/api/v1/health
+
+services:
+
+  veil-api:
+    build: .
+    image: veil:latest
+    container_name: veil-api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override localhost references inside Docker
+      - VEIL_API_URL=http://veil-api:8000
+      - AUDIT_FILE_PATH=/app/data/audit.jsonl
+      - THREAT_MEMORY_PATH=/app/data/threats.jsonl
+    volumes:
+      - veil-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  veil-dashboard:
+    build: .
+    image: veil:latest
+    container_name: veil-dashboard
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # Dashboard talks to API by service name, not localhost
+      - VEIL_API_URL=http://veil-api:8000
+      - AUDIT_FILE_PATH=/app/data/audit.jsonl
+      - THREAT_MEMORY_PATH=/app/data/threats.jsonl
+    volumes:
+      - veil-data:/app/data
+    depends_on:
+      veil-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  veil-data:
+    driver: local
