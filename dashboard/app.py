@@ -3,16 +3,13 @@ dashboard/app.py
 
 VEIL Security Dashboard — Streamlit application.
 
-Reads from the audit JSONL file and threat memory to visualize security activity.
-All data is read-only — the dashboard never writes to the pipeline.
-
 Pages:
-  Overview          — aggregate stats (protected status, totals, threats, revocations)
-  Live Activity     — auto-refreshing table of recent audit events
-  Attack Timeline   — chronological event chain for a selected session
-  Threat Investigation — detailed view with injection/trajectory/judge findings
-  Capabilities / Policy — static view of agent capability registry
-  Attack Lab        — trigger real pipeline calls via API buttons
+  Overview             — aggregate stats + component health
+  Live Activity        — auto-refreshing audit event table
+  Attack Timeline      — chronological event chain per session
+  Threat Investigation — judge reasoning, injection, policy violations
+  Capabilities / Policy — agent capability registry
+  🔴 Before vs After   — side-by-side: data leaks vs VEIL blocks it
 
 Run:
     streamlit run dashboard/app.py
@@ -421,142 +418,273 @@ def _api_post(path: str, payload: dict) -> Optional[dict | list]:
 
 
 # ---------------------------------------------------------------------------
-# Page: Attack Lab
+# Page: Before vs After  (the main demo page)
 # ---------------------------------------------------------------------------
 
 _SCENARIO_META = {
-    "support_legitimate":   {"label": "✅ Legitimate Request",    "desc": "SupportAgent reads customer record — should ALLOW"},
-    "p0_attack":            {"label": "💀 P0 Attack Chain",        "desc": "Injection → PII read → exfiltration → REVOKE"},
-    "privilege_abuse":      {"label": "🔒 Privilege Abuse",        "desc": "Shell execution attempt — globally forbidden"},
-    "pii_write_attempt":    {"label": "✏️ PII Write Attempt",      "desc": "Unauthorised write to customer_db — BLOCK"},
-    "finance_legitimate":   {"label": "💰 Finance Legitimate",     "desc": "FinanceAgent reads payment records — ALLOW"},
+    "p0_attack":          {"label": "💀 P0 Attack — Prompt Injection + Exfiltration",
+                           "desc":  "Injected SupportAgent reads customer PII then tries to POST it to attacker.net"},
+    "privilege_abuse":    {"label": "🔒 Privilege Abuse — Shell Execution",
+                           "desc":  "Agent attempts shell.execute — globally forbidden"},
+    "pii_write_attempt":  {"label": "✏️ PII Write — Unauthorised DB Write",
+                           "desc":  "SupportAgent tries to write to customer_db — not in its grants"},
+    "support_legitimate": {"label": "✅ Legitimate Request",
+                           "desc":  "SupportAgent reads a customer record — should be ALLOWED by VEIL"},
+    "finance_legitimate": {"label": "💰 Finance Legitimate",
+                           "desc":  "FinanceAgent reads payment records — within its grants"},
 }
 
 
-def page_attack_lab() -> None:
-    st.title("⚔️ Attack Lab")
+def page_before_after() -> None:
+    st.title("🔴 Before VEIL  vs  🛡️ After VEIL")
     st.markdown(
-        "Trigger real pipeline calls through the VEIL API. "
-        "Results are live — no prerecorded data."
+        "Pick a scenario and hit **Run Demo**. "
+        "The **left column** shows what happens on a company server with **no security** — "
+        "data leaks freely. The **right column** shows the **same request intercepted by VEIL**."
     )
 
-    # API health check
+    # ── API connectivity check ──────────────────────────────────────────────
     health = _api_get("/api/v1/health")
     if health is None:
         st.error(
-            f"⚠️ VEIL API not reachable at `{_api_url()}`. "
-            "Start it with: `uvicorn api.main:app --port 8000`"
+            f"❌ VEIL API not reachable at `{_api_url()}`. "
+            "Start it: `uvicorn api.main:app --host 0.0.0.0 --port 8000`"
         )
-    else:
-        overall = health.get("status", "unknown")
-        if overall == "ok":
-            st.success(f"🟢 VEIL API connected — all components healthy")
-        else:
-            st.warning(f"🟡 VEIL API connected but some components degraded")
+        return
+    st.success("🟢 VEIL API connected")
 
     st.divider()
 
-    # Before/After toggle
-    mode = st.radio(
-        "Demo Mode",
-        options=["🛡️ After VEIL (Gateway enforces)", "⚠️ Before VEIL (Direct — no gateway)"],
-        horizontal=True,
-        key="attack_lab_mode",
+    # ── Scenario picker ─────────────────────────────────────────────────────
+    scenario_labels = {v["label"]: k for k, v in _SCENARIO_META.items()}
+    chosen_label = st.selectbox(
+        "Choose a scenario",
+        options=list(scenario_labels.keys()),
+        index=0,
     )
-    use_veil = mode.startswith("🛡️")
+    chosen_scenario = scenario_labels[chosen_label]
+    st.markdown(f"_{_SCENARIO_META[chosen_scenario]['desc']}_")
 
+    run = st.button("🚀 Run Demo", type="primary", use_container_width=True)
+
+    if not run:
+        st.info("Select a scenario above and click **Run Demo** to start.")
+        return
+
+    # ── Run both sides simultaneously ───────────────────────────────────────
+    with st.spinner("Running both sides…"):
+        vuln_result     = _api_post("/vulnerable/attack",     {"scenario": chosen_scenario})
+        protected_result = _api_post("/api/v1/attacks/run",   {"scenario": chosen_scenario})
+
+    # ── Side-by-side layout ─────────────────────────────────────────────────
+    col_vuln, col_prot = st.columns(2, gap="large")
+
+    # ════════════════════════════════
+    # LEFT — Vulnerable server
+    # ════════════════════════════════
+    with col_vuln:
+        st.markdown(
+            '<div style="background:#7f1d1d;color:#fff;padding:10px 16px;'
+            'border-radius:8px;font-weight:700;font-size:1.1em;margin-bottom:12px;">'
+            '🔴 WITHOUT VEIL — No Security Controls'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        if vuln_result is None or "error" in (vuln_result or {}):
+            st.error(f"API error: {(vuln_result or {}).get('error','No response')}")
+        else:
+            steps = vuln_result.get("steps", [])
+            total = len(steps)
+            executed = vuln_result.get("steps_executed", total)
+            st.markdown(
+                f'<p style="color:#ef4444;font-weight:600;">'
+                f'⚠️ {executed}/{total} steps EXECUTED — attacker succeeds</p>',
+                unsafe_allow_html=True,
+            )
+            for step in steps:
+                _render_vuln_step(step)
+
+    # ════════════════════════════════
+    # RIGHT — VEIL protected
+    # ════════════════════════════════
+    with col_prot:
+        st.markdown(
+            '<div style="background:#14532d;color:#fff;padding:10px 16px;'
+            'border-radius:8px;font-weight:700;font-size:1.1em;margin-bottom:12px;">'
+            '🛡️ WITH VEIL — Every Step Enforced'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        if protected_result is None or "error" in (protected_result or {}):
+            st.error(f"API error: {(protected_result or {}).get('error','No response')}")
+        else:
+            steps = protected_result.get("steps", [])
+            blocked = sum(1 for s in steps if not s.get("executed"))
+            color   = "#22c55e" if blocked > 0 else "#64748b"
+            st.markdown(
+                f'<p style="color:{color};font-weight:600;">'
+                f'🛡️ {blocked}/{len(steps)} steps BLOCKED by VEIL</p>',
+                unsafe_allow_html=True,
+            )
+            for step in steps:
+                _render_prot_step(step)
+
+    # ── Summary banner ──────────────────────────────────────────────────────
     st.divider()
-    st.subheader("Attack Scenarios")
-
-    for scenario_name, meta in _SCENARIO_META.items():
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            run = st.button(meta["label"], key=f"btn_{scenario_name}", use_container_width=True)
-        with col2:
-            st.markdown(f"_{meta['desc']}_")
-
-        if run:
-            if use_veil:
-                _run_scenario_via_api(scenario_name)
-            else:
-                _run_scenario_direct(scenario_name)
+    v_steps = (vuln_result or {}).get("steps_executed", "?")
+    p_steps = sum(
+        1 for s in (protected_result or {}).get("steps", []) if not s.get("executed")
+    )
+    c1, c2 = st.columns(2)
+    c1.error(f"🔴 Without VEIL: **{v_steps} step(s) executed** — data exposed")
+    c2.success(f"🛡️ With VEIL: **{p_steps} step(s) blocked** — data protected")
 
 
-def _run_scenario_via_api(scenario_name: str) -> None:
-    """Run a named scenario via the VEIL API and render results."""
-    with st.spinner(f"Running `{scenario_name}` through VEIL…"):
-        result = _api_post("/api/v1/attacks/run", {"scenario": scenario_name})
+def _render_vuln_step(step: dict) -> None:
+    """Render one step from the vulnerable (no-VEIL) run."""
+    tool_op  = f"{step.get('tool','')}.{step.get('operation','')}"
+    resource = step.get("resource", "")
+    executed = step.get("executed", False)
+    output   = step.get("output", {})
+    purpose  = (step.get("purpose") or "")[:120]
 
-    if result is None or "error" in result:
-        st.error(f"API error: {result.get('error') if result else 'No response'}")
-        return
+    header_color = "#7f1d1d" if executed else "#374151"
+    status_text  = "EXECUTED ✓" if executed else "failed"
 
-    steps = result.get("steps", [])
-    session_id = result.get("session_id", "")
-    st.markdown(f"**Session:** `{session_id}` — **{len(steps)} step(s)**")
+    st.markdown(
+        f'<div style="border:1px solid #ef4444;border-radius:6px;'
+        f'padding:10px 14px;margin-bottom:10px;background:#1c0a0a;">'
+        f'<b style="color:#ef4444;">Step {step["step"]} — {tool_op}</b>'
+        f'<span style="float:right;background:#ef4444;color:#fff;'
+        f'padding:1px 8px;border-radius:10px;font-size:0.8em;">{status_text}</span>'
+        f'<br><span style="color:#9ca3af;font-size:0.85em;">→ {resource}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-    for step in steps:
-        decision = step.get("decision", "UNKNOWN")
-        color = _DECISION_COLORS.get(decision, "#64748b")
-        badge_html = _decision_badge(decision)
-        risk_html = _risk_badge(step.get("risk_level", "NONE"))
+    if purpose:
+        st.markdown(f"<span style='color:#9ca3af;font-size:0.83em;'>Purpose: {purpose}</span>",
+                    unsafe_allow_html=True)
 
-        with st.expander(
-            f"Step {step['step']} — {step['tool']}.{step['operation']} → {step['resource']}  [{decision}]",
-            expanded=(decision not in ("ALLOW",)),
-        ):
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f"**Decision:** {badge_html}", unsafe_allow_html=True)
-            c2.markdown(f"**Risk:** {risk_html}", unsafe_allow_html=True)
-            c3.markdown(f"**Executed:** {'Yes ✅' if step.get('executed') else 'No 🚫'}")
+    if executed and output:
+        # Show leaked data prominently
+        rows = output.get("rows", [])
+        if rows:
+            st.markdown(
+                f'<div style="background:#3b0a0a;border-left:3px solid #ef4444;'
+                f'padding:8px 12px;border-radius:4px;margin-top:6px;">'
+                f'<b style="color:#ef4444;">💀 DATA LEAKED — {len(rows)} record(s)</b>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            for row in rows:
+                st.markdown(
+                    f'<div style="font-family:monospace;font-size:0.82em;'
+                    f'color:#fca5a5;padding:2px 0;">{json.dumps(row)}</div>',
+                    unsafe_allow_html=True,
+                )
+        elif output.get("status_code"):
+            st.markdown(
+                f'<div style="color:#fca5a5;font-size:0.85em;">'
+                f'HTTP {output["status_code"]} → {output.get("response_body","")[:80]}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        elif output.get("content"):
+            st.markdown(
+                f'<div style="color:#fca5a5;font-size:0.85em;">'
+                f'Content: {str(output["content"])[:120]}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div style="color:#fca5a5;font-size:0.85em;">'
+                f'{json.dumps(output)[:120]}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-            reason = step.get("reason", "")
-            if decision in ("BLOCK", "REVOKE", "REQUIRE_APPROVAL"):
-                st.error(f"🧠 **Reason:** {reason}")
-            elif decision == "WARN":
-                st.warning(f"🧠 **Reason:** {reason}")
-            else:
-                st.success(f"🧠 **Reason:** {reason}")
-
-            if step.get("triggered_rules"):
-                st.markdown(f"**Rules fired:** `{'`, `'.join(step['triggered_rules'])}`")
-            if step.get("injection_detected"):
-                st.warning("🚨 Injection detected")
-            if step.get("revoked_capability"):
-                st.error(f"🔒 Capability revoked: `{step['revoked_capability']}`")
-            if step.get("execution_output"):
-                with st.expander("Tool output"):
-                    st.json(step["execution_output"])
+    st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
 
-def _run_scenario_direct(scenario_name: str) -> None:
-    """Run scenario directly (no gateway) — Before VEIL mode."""
-    from simulator.client.scenarios import SCENARIOS
-    from simulator.client.tools import dispatch
+def _render_prot_step(step: dict) -> None:
+    """Render one step from the VEIL-protected run."""
+    tool_op   = f"{step.get('tool','')}.{step.get('operation','')}"
+    resource  = step.get("resource", "")
+    decision  = step.get("decision", "UNKNOWN")
+    reason    = (step.get("reason") or "")[:150]
+    executed  = step.get("executed", False)
+    revoked   = step.get("revoked_capability")
+    rules     = step.get("triggered_rules", [])
+    injected  = step.get("injection_detected", False)
 
-    scenario_fn = SCENARIOS.get(scenario_name)
-    if scenario_fn is None:
-        st.error(f"Unknown scenario: {scenario_name}")
-        return
+    d_color = _DECISION_COLORS.get(decision, "#64748b")
+    bg      = "#0a1f0a" if not executed else "#0a1a0a"
+    border  = d_color
 
-    session_id = f"direct-{scenario_name}-{uuid.uuid4().hex[:6]}"
-    actions = scenario_fn(session_id=session_id)
+    st.markdown(
+        f'<div style="border:1px solid {border};border-radius:6px;'
+        f'padding:10px 14px;margin-bottom:10px;background:{bg};">'
+        f'<b style="color:{d_color};">Step {step["step"]} — {tool_op}</b>'
+        f'<span style="float:right;background:{d_color};color:#fff;'
+        f'padding:1px 8px;border-radius:10px;font-size:0.8em;">{decision}</span>'
+        f'<br><span style="color:#9ca3af;font-size:0.85em;">→ {resource}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-    st.warning(f"⚠️ Running WITHOUT VEIL — {len(actions)} action(s) dispatched directly to tool stubs")
-    st.markdown(f"**Session:** `{session_id}`")
+    exec_text = "✅ Executed (permitted)" if executed else "🚫 Blocked — tool never ran"
+    exec_color = "#22c55e" if executed else "#ef4444"
+    st.markdown(
+        f'<span style="color:{exec_color};font-size:0.9em;font-weight:600;">'
+        f'{exec_text}</span>',
+        unsafe_allow_html=True,
+    )
 
-    for i, action in enumerate(actions, start=1):
-        with st.expander(
-            f"Step {i} — {action.tool}.{action.operation} → {action.resource}  [UNPROTECTED]",
-            expanded=True,
-        ):
-            st.markdown(f"**Mode:** ⚠️ No VEIL gateway")
-            try:
-                output = dispatch(action)
-                st.success("✅ Tool executed (no enforcement)")
-                st.json(output)
-            except Exception as exc:
-                st.error(f"Tool error: {exc}")
+    if reason:
+        box_color = "#1a0a0a" if decision in ("BLOCK","REVOKE") else "#0a1a0a"
+        st.markdown(
+            f'<div style="background:{box_color};border-left:3px solid {d_color};'
+            f'padding:6px 10px;border-radius:4px;margin-top:6px;'
+            f'font-size:0.85em;color:#d1d5db;">'
+            f'🧠 {reason}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    if injected:
+        st.markdown(
+            '<div style="color:#fbbf24;font-size:0.82em;margin-top:4px;">'
+            '🚨 Injection signal detected in payload</div>',
+            unsafe_allow_html=True,
+        )
+    if rules:
+        st.markdown(
+            f'<div style="color:#94a3b8;font-size:0.8em;margin-top:4px;">'
+            f'Rules: {", ".join(rules)}</div>',
+            unsafe_allow_html=True,
+        )
+    if revoked:
+        st.markdown(
+            f'<div style="color:#ef4444;font-weight:600;font-size:0.85em;margin-top:4px;">'
+            f'🔒 Capability REVOKED: {revoked}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if executed and step.get("execution_output"):
+        out = step["execution_output"]
+        rows = out.get("rows", [])
+        if rows:
+            st.markdown(
+                f'<div style="color:#86efac;font-size:0.83em;margin-top:4px;">'
+                f'Output: {len(rows)} row(s) returned (permitted read)</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -641,11 +769,11 @@ def main() -> None:
         "Navigate",
         options=[
             "Overview",
+            "🔴 Before vs After",
             "Live Activity",
             "Attack Timeline",
             "Threat Investigation",
             "Capabilities / Policy",
-            "⚔️ Attack Lab",
         ],
     )
 
@@ -663,6 +791,8 @@ def main() -> None:
         _render_health_indicators()
         st.divider()
         page_overview(records)
+    elif page == "🔴 Before vs After":
+        page_before_after()
     elif page == "Live Activity":
         page_live_activity(records)
     elif page == "Attack Timeline":
@@ -671,8 +801,6 @@ def main() -> None:
         page_threat_investigation(records, threat_records)
     elif page == "Capabilities / Policy":
         page_capabilities()
-    elif page == "⚔️ Attack Lab":
-        page_attack_lab()
 
 
 if __name__ == "__main__":
