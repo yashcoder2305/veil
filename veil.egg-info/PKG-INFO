@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: veil
+Version: 0.1.0
+Requires-Python: >=3.11
+Requires-Dist: pydantic<3.0,>=2.6
+Requires-Dist: python-dotenv<2.0,>=1.0
