@@ -1,7 +1,7 @@
 """
 veil/agents/counter.py
 
-CounterAgent — watsonx.ai-backed adversarial analysis.
+CounterAgent — Groq-backed adversarial analysis.
 
 Given an Action and its surrounding context, the CounterAgent constructs
 plausible abuse scenarios: "What could a malicious agent do with this action?"
@@ -12,10 +12,13 @@ Never receives raw customer data — metadata only.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from typing import Optional
 
 from veil.config import settings
+
 
 # ---------------------------------------------------------------------------
 # CounterAgentFinding — output type
@@ -46,12 +49,12 @@ class CounterAgentFinding:
 # Prompt builder
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """\
-You are VEIL-CounterAgent, an adversarial AI security analyst.
-Your job is to identify how a malicious actor could abuse the described agent action.
-Be concise and precise. Output ONLY the JSON object requested — no markdown fences.
-Never include raw personal data in your response.
-"""
+_SYSTEM_PROMPT = (
+    "You are VEIL-CounterAgent, an adversarial AI security analyst. "
+    "Your job is to identify how a malicious actor could abuse the described agent action. "
+    "Be concise and precise. Output ONLY the JSON object requested — no markdown fences. "
+    "Never include raw personal data in your response."
+)
 
 _USER_TEMPLATE = """\
 Analyze this agent action for potential abuse:
@@ -78,7 +81,7 @@ Respond with a JSON object with exactly these keys:
 """
 
 
-def _build_prompt(action, context: dict) -> tuple[str, str]:
+def _build_messages(action, context: dict) -> list[dict]:
     user_msg = _USER_TEMPLATE.format(
         agent_id=action.agent_id,
         tool=action.tool,
@@ -92,15 +95,15 @@ def _build_prompt(action, context: dict) -> tuple[str, str]:
         trajectory_anomaly=context.get("trajectory_anomaly", False),
         policy_violations=", ".join(context.get("policy_violations", [])) or "(none)",
     )
-    return _SYSTEM_PROMPT, user_msg
+    return [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Fallback parser — extract JSON from messy LLM output
 # ---------------------------------------------------------------------------
-
-import json
-import re
 
 
 def _parse_finding(raw: str) -> dict:
@@ -125,7 +128,7 @@ def _parse_finding(raw: str) -> dict:
 
 class CounterAgent:
     """
-    Calls watsonx.ai to generate an adversarial analysis of a high-risk action.
+    Calls Groq (Llama 3) to generate an adversarial analysis of a high-risk action.
 
     Falls back gracefully if the LLM is unavailable — returns a conservative
     BLOCK recommendation so the pipeline stays safe.
@@ -137,21 +140,12 @@ class CounterAgent:
     def _get_client(self):
         if self._client is None:
             try:
-                from ibm_watsonx_ai import APIClient, Credentials
-                from ibm_watsonx_ai.foundation_models import ModelInference
-
-                credentials = Credentials(
-                    url=settings.watsonx_url,
-                    api_key=settings.watsonx_api_key,
-                )
-                self._client = ModelInference(
-                    model_id=settings.watsonx_model_id,
-                    credentials=credentials,
-                    project_id=settings.watsonx_project_id,
-                    params={"max_new_tokens": 512, "temperature": 0.2},
-                )
+                from groq import Groq
+                self._client = Groq(api_key=settings.groq_api_key)
             except Exception as exc:
-                raise RuntimeError(f"CounterAgent: failed to initialise watsonx client: {exc}") from exc
+                raise RuntimeError(
+                    f"CounterAgent: failed to initialise Groq client: {exc}"
+                ) from exc
         return self._client
 
     def analyze(self, action, context: dict) -> CounterAgentFinding:
@@ -163,13 +157,17 @@ class CounterAgent:
           trajectory_anomaly  bool  — TrajectoryEngine flagged a pattern
           policy_violations   list  — violated rule identifiers
         """
-        system_msg, user_msg = _build_prompt(action, context)
+        messages = _build_messages(action, context)
 
         try:
             client = self._get_client()
-            full_prompt = f"{system_msg}\n\n{user_msg}"
-            response = client.generate_text(prompt=full_prompt)
-            raw = response if isinstance(response, str) else str(response)
+            response = client.chat.completions.create(
+                model=settings.groq_model_id,
+                messages=messages,
+                max_tokens=512,
+                temperature=0.2,
+            )
+            raw = response.choices[0].message.content or ""
         except Exception as exc:
             # LLM unavailable — fail safe
             return CounterAgentFinding(

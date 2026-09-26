@@ -11,7 +11,7 @@ Load order:
 
 Usage:
     from veil.config import settings
-    client = WatsonxAI(api_key=settings.watsonx_api_key)
+    client = Groq(api_key=settings.groq_api_key)
 """
 
 from __future__ import annotations
@@ -34,40 +34,24 @@ class _Settings:
     """
 
     # ------------------------------------------------------------------
-    # IBM watsonx.ai — required for Yash's intelligence layer
+    # Groq — LLM backend for CounterAgent + JudgeAgent
     # ------------------------------------------------------------------
 
     @property
-    def watsonx_api_key(self) -> str:
-        val = os.environ.get("WATSONX_API_KEY", "")
+    def groq_api_key(self) -> str:
+        val = os.environ.get("GROQ_API_KEY", "")
         if not val:
             raise EnvironmentError(
-                "WATSONX_API_KEY is not set. "
-                "Copy .env.example to .env and fill in your credentials."
+                "GROQ_API_KEY is not set. "
+                "Copy .env.example to .env and add your Groq API key. "
+                "Get one free at https://console.groq.com/keys"
             )
         return val
 
     @property
-    def watsonx_project_id(self) -> str:
-        val = os.environ.get("WATSONX_PROJECT_ID", "")
-        if not val:
-            raise EnvironmentError(
-                "WATSONX_PROJECT_ID is not set. "
-                "Copy .env.example to .env and fill in your credentials."
-            )
-        return val
-
-    @property
-    def watsonx_url(self) -> str:
-        return os.environ.get(
-            "WATSONX_URL", "https://us-south.ml.cloud.ibm.com"
-        )
-
-    @property
-    def watsonx_model_id(self) -> str:
-        return os.environ.get(
-            "WATSONX_MODEL_ID", "ibm/granite-13b-instruct-v2"
-        )
+    def groq_model_id(self) -> str:
+        """Groq model to use. Default: llama3-8b-8192 (fast, free tier)."""
+        return os.environ.get("GROQ_MODEL_ID", "llama3-8b-8192")
 
     # ------------------------------------------------------------------
     # Audit & memory persistence
@@ -121,7 +105,7 @@ class _Settings:
     def __repr__(self) -> str:  # never print credentials
         return (
             f"VEILSettings("
-            f"model={self.watsonx_model_id!r}, "
+            f"model={self.groq_model_id!r}, "
             f"audit={self.audit_file_path}, "
             f"gateway={self.gateway_host}:{self.gateway_port})"
         )

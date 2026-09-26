@@ -1,7 +1,7 @@
 """
 veil/agents/judge.py
 
-JudgeAgent — watsonx.ai-backed verdict engine.
+JudgeAgent — Groq-backed verdict engine.
 
 The JudgeAgent receives the CounterAgent's abuse finding and reviews it
 against the agent's declared goal and granted permissions. It returns a
@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from veil.config import settings
+
 
 # ---------------------------------------------------------------------------
 # JudgeVerdict — output type
@@ -49,12 +50,12 @@ class JudgeVerdict:
 # Prompt builder
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """\
-You are VEIL-JudgeAgent, an impartial AI security judge.
-You review a security concern raised by a counter-agent and decide whether it is valid
-given the agent's declared goal and granted permissions.
-Output ONLY the JSON object requested — no markdown fences, no commentary.
-"""
+_SYSTEM_PROMPT = (
+    "You are VEIL-JudgeAgent, an impartial AI security judge. "
+    "You review a security concern raised by a counter-agent and decide whether it is valid "
+    "given the agent's declared goal and granted permissions. "
+    "Output ONLY the JSON object requested — no markdown fences, no commentary."
+)
 
 _USER_TEMPLATE = """\
 Agent ID: {agent_id}
@@ -86,8 +87,8 @@ Respond with a JSON object with exactly these keys:
 """
 
 
-def _build_prompt(action, counter_finding, context: dict) -> str:
-    return _USER_TEMPLATE.format(
+def _build_messages(action, counter_finding, context: dict) -> list[dict]:
+    user_msg = _USER_TEMPLATE.format(
         agent_id=action.agent_id,
         declared_goal=context.get("declared_goal", "(unknown)"),
         granted_capabilities=", ".join(context.get("granted_capabilities", [])) or "(none)",
@@ -102,6 +103,10 @@ def _build_prompt(action, counter_finding, context: dict) -> str:
         risk_indicators=", ".join(counter_finding.risk_indicators) or "(none)",
         counter_recommendation=counter_finding.recommendation,
     )
+    return [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
 
 
 def _parse_verdict(raw: str) -> dict:
@@ -137,22 +142,11 @@ class JudgeAgent:
     def _get_client(self):
         if self._client is None:
             try:
-                from ibm_watsonx_ai import Credentials
-                from ibm_watsonx_ai.foundation_models import ModelInference
-
-                credentials = Credentials(
-                    url=settings.watsonx_url,
-                    api_key=settings.watsonx_api_key,
-                )
-                self._client = ModelInference(
-                    model_id=settings.watsonx_model_id,
-                    credentials=credentials,
-                    project_id=settings.watsonx_project_id,
-                    params={"max_new_tokens": 512, "temperature": 0.1},
-                )
+                from groq import Groq
+                self._client = Groq(api_key=settings.groq_api_key)
             except Exception as exc:
                 raise RuntimeError(
-                    f"JudgeAgent: failed to initialise watsonx client: {exc}"
+                    f"JudgeAgent: failed to initialise Groq client: {exc}"
                 ) from exc
         return self._client
 
@@ -164,13 +158,17 @@ class JudgeAgent:
           declared_goal         str   — agent's stated purpose
           granted_capabilities  list  — capability tokens granted to agent
         """
-        user_msg = _build_prompt(action, counter_finding, context)
-        full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_msg}"
+        messages = _build_messages(action, counter_finding, context)
 
         try:
             client = self._get_client()
-            response = client.generate_text(prompt=full_prompt)
-            raw = response if isinstance(response, str) else str(response)
+            response = client.chat.completions.create(
+                model=settings.groq_model_id,
+                messages=messages,
+                max_tokens=512,
+                temperature=0.1,
+            )
+            raw = response.choices[0].message.content or ""
         except Exception as exc:
             # LLM unavailable — fail safe: uphold the concern
             return JudgeVerdict(

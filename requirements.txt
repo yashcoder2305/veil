@@ -4,8 +4,8 @@
 # Data validation & models
 pydantic>=2.6,<3.0
 
-# IBM watsonx.ai — LLM backend (used by Yash's intelligence layer)
-ibm-watsonx-ai>=1.0,<2.0
+# LLM backend — Groq (CounterAgent + JudgeAgent)
+groq>=0.9,<1.0
 
 # Dashboard
 streamlit>=1.32,<2.0
