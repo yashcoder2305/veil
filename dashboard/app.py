@@ -768,12 +768,10 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
-    # Load data
-    audit_path = settings.audit_file_path
-    threat_path = settings.threat_memory_path
-
-    records = _load_audit_records(audit_path)
-    threat_records = _load_threat_patterns(threat_path)
+    # Load data from API instead of disk so Render multi-service works
+    records = _api_get("/api/v1/events?limit=500") or []
+    threat_records = _api_get("/api/v1/threats") or []
+    audit_path = "API: /api/v1/events"
 
     # Sidebar
     st.sidebar.title("🛡️ VEIL")

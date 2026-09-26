@@ -364,6 +364,20 @@ def events(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/threats
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/threats", tags=["audit"])
+def threats() -> list[dict]:
+    """
+    Return all threat patterns from memory.
+    """
+    from veil.memory.threats import ThreatMemory
+    tm = ThreatMemory()
+    return [p.model_dump() for p in tm.get_all_patterns()]
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/agents
 # ---------------------------------------------------------------------------
 
