@@ -365,20 +365,15 @@ def _render_detail(r: dict) -> None:
         st.markdown(f"**Rules:** `{'`, `'.join(r['triggered_rules'])}`")
     if r.get("risk_level"):
         st.markdown(
-            f"**Risk:** {_risk_badge(r['risk_level'])}  "
-            f"(score: {r.get('risk_score', 'n/a')})",
+            f"**Risk:** {_risk_badge(r['risk_level'])}",
             unsafe_allow_html=True,
         )
     if r.get("injection_detected"):
-        st.warning(f"**Injection detected:** {r.get('injection_signals', '')}")
-    if r.get("trajectory_anomaly"):
-        st.error(f"**Trajectory anomaly:** {r.get('trajectory_pattern', '')}")
-    if r.get("counter_agent_finding"):
-        with st.expander("Counter-Agent Finding"):
-            st.json(r["counter_agent_finding"])
-    if r.get("judge_verdict"):
-        with st.expander("Judge Verdict"):
-            st.json(r["judge_verdict"])
+        st.warning("**Injection detected** in this action.")
+    if r.get("policy_violated_rules"):
+        st.markdown(f"**Policy violations:** `{'`, `'.join(r['policy_violated_rules'])}`")
+    if r.get("data_classification"):
+        st.markdown(f"**Data classification:** `{r['data_classification']}`")
 
 
 # ---------------------------------------------------------------------------
@@ -388,29 +383,32 @@ def _render_detail(r: dict) -> None:
 
 def page_capabilities() -> None:
     st.title("Capabilities & Policy")
-    st.markdown("Static view of agent capability grants and denials.")
+    st.markdown("Live view of agent capability grants from the CapabilityManager registry.")
     st.divider()
 
-    for agent_name, profile in AGENT_CAPABILITIES.items():
-        with st.expander(f"**{agent_name}**", expanded=True):
-            st.markdown(f"**Goal:** {profile['goal']}")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Allowed capabilities:**")
-                for cap in profile["allowed"]:
-                    st.markdown(f"  - ✅ `{cap}`")
-            with col2:
-                st.markdown("**Denied capabilities:**")
-                for cap in profile["denied"]:
-                    st.markdown(f"  - ❌ `{cap}`")
+    from veil.security.capabilities import CapabilityManager
+    mgr = CapabilityManager()
+    profiles = mgr.all_profiles()
+
+    for profile in profiles:
+        with st.expander(f"**{profile.agent_id}**", expanded=True):
+            st.markdown(f"**Description:** {profile.description}")
+            st.markdown("**Grants:**")
+            for g in profile.grants:
+                ops = ", ".join(sorted(g.operations))
+                resources = ", ".join(sorted(g.resources))
+                st.markdown(f"  - `{g.tool}` — ops: `{ops}` — resources: `{resources}`")
 
     st.divider()
     st.subheader("Hard Policy Rules")
     rules = [
         ("POLICY_PII_TO_EXTERNAL", "Sensitive/PII data must not be sent to external HTTP endpoints."),
-        ("POLICY_SHELL_FORBIDDEN", "shell.execute is forbidden for all non-admin agents."),
-        ("POLICY_CREDENTIAL_READ_RESTRICTED", "CREDENTIAL-classified resources require explicit approval."),
-        ("POLICY_FINANCIAL_EXTERNAL_BLOCKED", "FINANCIAL data cannot be transferred to external destinations."),
+        ("POLICY_SHELL_FORBIDDEN", "shell.execute is globally forbidden for all agents."),
+        ("POLICY_FORBIDDEN_OPERATION", "execute/spawn operations are globally forbidden."),
+        ("POLICY_CREDENTIAL_ACCESS_UNREGISTERED", "CREDENTIAL/SECRET resources accessed by unregistered agents."),
+        ("POLICY_WRITE_TO_SENSITIVE_RESOURCE", "Write to sensitive resource — escalates to risk engine."),
+        ("POLICY_EXTERNAL_HTTP_FROM_NON_RESEARCH", "External HTTP from agent without explicit grant."),
+        ("POLICY_SUSPICIOUS_PROVENANCE", "external_content provenance — escalates to risk engine."),
     ]
     for rule_id, description in rules:
         st.markdown(f"- **`{rule_id}`** — {description}")
