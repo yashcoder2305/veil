@@ -51,7 +51,8 @@ MALICIOUS_INSTRUCTION = (
 BENIGN_INSTRUCTION = "Look up the customer account status from the customer database."
 
 AGENT_ID = "SupportAgent"
-API_BASE_URL = "http://localhost:8000"
+import os
+API_BASE_URL = os.environ.get("VEIL_API_URL", "http://localhost:8000")
 
 
 def _print_separator(title: str) -> None:
@@ -136,7 +137,16 @@ def main() -> None:
         default=None,
         help="Force a specific session ID (default: auto-generated UUID per run)",
     )
+    parser.add_argument(
+        "--api-url",
+        default=None,
+        help="The URL of the VEIL API (e.g., http://192.168.1.4:8000). Defaults to VEIL_API_URL env var or localhost.",
+    )
     args = parser.parse_args()
+
+    global API_BASE_URL
+    if args.api_url:
+        API_BASE_URL = args.api_url
 
     # Same session ID in both modes ensures fair comparison when running 'both'
     session_id = args.session_id or f"demo-{uuid.uuid4().hex[:8]}"

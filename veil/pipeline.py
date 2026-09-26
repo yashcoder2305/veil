@@ -169,7 +169,10 @@ class VEILPipeline:
 
                 counter_finding = self._counter_agent.analyze(action, context)
                 judge_verdict = self._judge_agent.review(action, counter_finding, context)
-            except Exception:
+            except Exception as e:
+                import traceback
+                print(f"ERROR: Failed to invoke Groq LLM Agents: {e}")
+                traceback.print_exc()
                 # LLM unavailable — proceed without agentic analysis
                 # The deterministic decision engine will still enforce hard rules
                 judge_verdict = None

@@ -21,7 +21,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -120,6 +120,19 @@ _RISK_COLORS = {
     "CRITICAL": "#dc2626",
 }
 
+
+def _format_ts(ts_str: str) -> str:
+    if not ts_str:
+        return ""
+    try:
+        # Convert to datetime and adjust to IST (UTC+5:30)
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt_ist = dt.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        return dt_ist.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts_str)[:19].replace("T", " ")
 
 def _badge(text: str, color: str) -> str:
     return (
@@ -237,7 +250,7 @@ def _render_events_table(records: list[dict]) -> None:
     for r in records:
         rows.append(
             {
-                "Timestamp": r.get("timestamp", "")[:19].replace("T", " "),
+                "Timestamp": _format_ts(r.get("timestamp", "")),
                 "Agent": r.get("agent_id", ""),
                 "Session": (r.get("session_id", "") or "")[:8] + "…",
                 "Tool": r.get("tool", ""),
@@ -277,7 +290,7 @@ def page_attack_timeline(records: list[dict]) -> None:
         decision = r.get("decision", "UNKNOWN")
         risk = r.get("risk_level", "NONE")
         color = _DECISION_COLORS.get(decision, "#64748b")
-        ts = r.get("timestamp", "")[:19].replace("T", " ")
+        ts = _format_ts(r.get("timestamp", ""))
 
         with st.expander(
             f"Step {i} — {r.get('tool', '')}.{r.get('operation', '')} → "
@@ -324,7 +337,7 @@ def page_threat_investigation(records: list[dict], threat_records: list[dict]) -
                 with st.expander(
                     f"[{decision}] {r.get('agent_id', '')} — "
                     f"{r.get('tool', '')}.{r.get('operation', '')} "
-                    f"@ {r.get('timestamp', '')[:19]}",
+                    f"@ {_format_ts(r.get('timestamp', ''))}",
                     expanded=decision in ("BLOCK", "REVOKE"),
                 ):
                     _render_detail(r)
@@ -344,8 +357,8 @@ def page_threat_investigation(records: list[dict], threat_records: list[dict]) -
                     st.markdown(
                         f"**Severity:** {_risk_badge(sev)}", unsafe_allow_html=True
                     )
-                    st.markdown(f"**First seen:** {str(p.get('first_seen', ''))[:19]}")
-                    st.markdown(f"**Last seen:** {str(p.get('last_seen', ''))[:19]}")
+                    st.markdown(f"**First seen:** {_format_ts(p.get('first_seen', ''))}")
+                    st.markdown(f"**Last seen:** {_format_ts(p.get('last_seen', ''))}")
                     st.markdown("**Indicators:**")
                     for ind in p.get("indicators", []):
                         st.markdown(f"  - `{ind}`")
@@ -432,6 +445,8 @@ _SCENARIO_META = {
                            "desc":  "SupportAgent reads a customer record — should be ALLOWED by VEIL"},
     "finance_legitimate": {"label": "💰 Finance Legitimate",
                            "desc":  "FinanceAgent reads payment records — within its grants"},
+    "ransomware_attack":  {"label": "💣 Ransomware — Data Destruction",
+                           "desc":  "Compromised agent reads backups, encrypts them, and deletes the original DB"},
 }
 
 
