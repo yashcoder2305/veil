@@ -1,0 +1,29 @@
+services:
+  # The FastAPI Backend
+  - type: web
+    name: veil-api
+    env: python
+    buildCommand: "pip install -r requirements.txt && pip install -e ."
+    startCommand: "uvicorn api.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # You will enter this securely in the Render UI
+      - key: GROQ_MODEL_ID
+        value: "llama3-8b-8192"
+      - key: RISK_THRESHOLD_FOR_AGENTS
+        value: "HIGH"
+
+  # The Streamlit Dashboard
+  - type: web
+    name: veil-dashboard
+    env: python
+    buildCommand: "pip install -r requirements.txt && pip install -e ."
+    startCommand: "streamlit run dashboard/app.py --server.port $PORT --server.address 0.0.0.0"
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # You will enter this securely in the Render UI
+      - key: VEIL_API_URL
+        fromService:
+          type: web
+          name: veil-api
+          envVarKey: RENDER_EXTERNAL_URL
