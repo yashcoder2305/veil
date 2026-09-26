@@ -1,0 +1,21 @@
+# VEIL — Verifiable Execution Isolation Layer
+# Core dependencies
+
+# Data validation & models
+pydantic>=2.6,<3.0
+
+# IBM watsonx.ai — LLM backend (used by Yash's intelligence layer)
+ibm-watsonx-ai>=1.0,<2.0
+
+# Dashboard
+streamlit>=1.32,<2.0
+
+# API server (gateway HTTP entry point)
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+
+# Environment variable loading
+python-dotenv>=1.0,<2.0
+
+# HTTP client (used by simulator http.request stub)
+httpx>=0.27,<1.0
