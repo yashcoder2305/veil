@@ -186,7 +186,7 @@ def _pipeline_result_to_step(pipeline_result, step: int) -> StepResult:
         requires_human_review=pipeline_result.decision_result.requires_human_review,
         revoked_capability=pipeline_result.decision_result.revoked_capability,
         executed=er.executed,
-        execution_output=er.output if er.executed else None,
+        execution_output=er.tool_output if er.executed else None,
     )
 
 
@@ -279,7 +279,7 @@ def execute(request: ExecuteRequest) -> ExecuteResponse:
         requires_human_review=result.decision_result.requires_human_review,
         revoked_capability=result.decision_result.revoked_capability,
         executed=er.executed,
-        execution_output=er.output if er.executed else None,
+        execution_output=er.tool_output if er.executed else None,
     )
 
 
