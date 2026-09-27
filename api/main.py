@@ -148,6 +148,12 @@ class HealthResponse(BaseModel):
     components: dict[str, dict]
 
 
+class SimpleHealthResponse(BaseModel):
+    status: str
+    service: str
+
+
+
 class CapabilityGrantResponse(BaseModel):
     tool: str
     operations: list[str]
@@ -188,6 +194,19 @@ def _pipeline_result_to_step(pipeline_result, step: int) -> StepResult:
         executed=er.executed,
         execution_output=er.tool_output if er.executed else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /health  (Lightweight health-check for external uptime monitors / Render)
+# ---------------------------------------------------------------------------
+
+@app.get("/health", response_model=SimpleHealthResponse, tags=["meta"])
+def health_check() -> SimpleHealthResponse:
+    """
+    Lightweight health check endpoint for external uptime monitors (e.g. Render).
+    Fast, zero side-effects, no database or LLM calls.
+    """
+    return SimpleHealthResponse(status="ok", service="VEIL")
 
 
 # ---------------------------------------------------------------------------
