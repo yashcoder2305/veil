@@ -197,16 +197,18 @@ def _pipeline_result_to_step(pipeline_result, step: int) -> StepResult:
 
 
 # ---------------------------------------------------------------------------
-# GET /health  (Lightweight health-check for external uptime monitors / Render)
+# GET/HEAD /health  (Lightweight health-check for external uptime monitors / Render / UptimeRobot)
 # ---------------------------------------------------------------------------
 
-@app.get("/health", response_model=SimpleHealthResponse, tags=["meta"])
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=SimpleHealthResponse, tags=["meta"])
 def health_check() -> SimpleHealthResponse:
     """
-    Lightweight health check endpoint for external uptime monitors (e.g. Render).
+    Lightweight health check endpoint for external uptime monitors (e.g. Render, UptimeRobot).
+    Accepts both GET and HEAD requests.
     Fast, zero side-effects, no database or LLM calls.
     """
     return SimpleHealthResponse(status="ok", service="VEIL")
+
 
 
 # ---------------------------------------------------------------------------
